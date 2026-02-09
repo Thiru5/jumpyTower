@@ -2,7 +2,7 @@ services:
   - type: static
     name: valentine-tower
     env: production
-    # No build step needed for this plain HTML/JS app. Leave empty so Render simply serves files.
-    buildCommand: ""
+    # No build step needed for this plain HTML/JS app. Use a no-op so the pipeline is explicit.
+    buildCommand: 'echo "no build"'
     # Publish the project root (index.html is at repo root)
-    publishPath: "/"
+    publishPath: "."
