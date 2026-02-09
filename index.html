@@ -1,0 +1,985 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Valentine Tower</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0b1020; overflow: hidden; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+    #wrap { position: relative; width: 100vw; height: 100vh; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+
+    /* UI Overlay */
+    .hud {
+      position: absolute; left: 12px; top: 12px;
+      color: #e8ecff; font-weight: 600; font-size: 14px;
+      background: rgba(0,0,0,0.35); padding: 10px 12px; border-radius: 12px;
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255,255,255,0.12);
+      line-height: 1.35;
+    }
+    .hint { opacity: 0.85; font-weight: 500; }
+
+    /* Pop-up */
+    .modal {
+      position: absolute; inset: 0;
+      display: none; align-items: center; justify-content: center;
+      background: rgba(0,0,0,0.55);
+      backdrop-filter: blur(6px);
+    }
+    .card {
+      width: min(520px, calc(100vw - 32px));
+      background: rgba(18, 26, 55, 0.92);
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 18px;
+      padding: 18px 18px 14px;
+      color: #f3f5ff;
+      box-shadow: 0 18px 60px rgba(0,0,0,0.5);
+      position: relative;
+    }
+    .card h2 { margin: 0 0 6px; font-size: 20px; }
+    .card p { margin: 0 0 14px; opacity: 0.92; }
+    .btnrow { position: relative; height: 70px; }
+    .btn {
+      position: absolute;
+      padding: 10px 16px;
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,0.16);
+      cursor: pointer;
+      font-weight: 700;
+      user-select: none;
+      transform: translateZ(0);
+    }
+    #yesBtn { left: 22px; top: 10px; background: linear-gradient(90deg,#ff4d6d,#ff8fab); color: #1b0a10; }
+    #noBtn  { right: 22px; top: 10px; background: rgba(255,255,255,0.08); color: #f3f5ff; }
+
+    /* Success banner */
+    .success {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.14);
+      display: none;
+      font-weight: 700;
+    }
+  </style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game"></canvas>
+
+  <div class="hud" id="hud">
+    <div>Floor: <span id="floorTxt">Feb 1st Floor</span></div>
+    <div>Boost: <span id="boostTxt">None</span></div>
+    <div class="hint">Move: ← → / A D · Jump: Space / ↑</div>
+  </div>
+
+  <div class="modal" id="modal">
+    <div class="card">
+      <h2>Would you like to be my valentine?</h2>
+      <p>He’s been waiting on the Feb 14th Floor with flowers 💐 and a card 💌.</p>
+      <div class="btnrow" id="btnArea">
+        <div class="btn" id="yesBtn">Yes</div>
+        <div class="btn" id="noBtn">No</div>
+      </div>
+      <div class="success" id="successMsg">🎉 Congratulations! Your husband is happy! 🎉</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  // ===== Canvas setup =====
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+  function resize() {
+    const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
+    canvas.width = Math.floor(window.innerWidth * dpr);
+    canvas.height = Math.floor(window.innerHeight * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  // ===== UI =====
+  const floorTxt = document.getElementById("floorTxt");
+  const modal = document.getElementById("modal");
+  const yesBtn = document.getElementById("yesBtn");
+  const noBtn = document.getElementById("noBtn");
+  const btnArea = document.getElementById("btnArea");
+  const successMsg = document.getElementById("successMsg");
+
+  // ===== Controls =====
+  const keys = new Set();
+  window.addEventListener("keydown", (e) => {
+    if (["ArrowLeft","ArrowRight","ArrowUp","Space","KeyA","KeyD"].includes(e.code)) e.preventDefault();
+    keys.add(e.code);
+  }, { passive: false });
+  window.addEventListener("keyup", (e) => keys.delete(e.code));
+
+  // ===== Head images (from public folder) =====
+  // helper that tries multiple extensions and sets a ready flag
+  function loadHead(baseName) {
+    const exts = [".png", ".webp", ".jpg", ".jpeg"];
+    let i = 0;
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img._ready = false;
+    img.onerror = () => {
+      i++;
+      if (i < exts.length) img.src = `${baseName}${exts[i]}`;
+      else img._ready = false;
+    };
+    img.onload = () => { img._ready = true; };
+    img.src = `${baseName}${exts[i]}`;
+    return img;
+  }
+
+  const girlHeadImg = loadHead("public/girl");
+  const girlJumpHeadImg = loadHead("public/girl-jump");
+  const boyHeadImg = loadHead("public/boy");
+
+  // ===== Background music (from public folder) =====
+  const bgMusic = new Audio('public/music.mp3');
+  bgMusic.loop = true;
+  bgMusic.volume = 0.45;
+  // try to play immediately; if blocked (autoplay), start on first user gesture
+  function startBgMusic() {
+    if (bgMusic._started) return;
+    bgMusic.play().then(() => { bgMusic._started = true; }).catch(() => {
+      // wait for user interaction
+    });
+  }
+  startBgMusic();
+  window.addEventListener('keydown', startBgMusic, { once: true });
+  window.addEventListener('pointerdown', startBgMusic, { once: true });
+
+  // Jump sound: play the jump clip from the start on each jump
+  const jumpAudio = new Audio('public/jump.mp3');
+  jumpAudio.preload = 'auto';
+  jumpAudio.volume = 0.9;
+  function playJumpSound() {
+    try {
+      // restart clip and play; ignore play errors
+      try { jumpAudio.currentTime = 0; } catch (e) {}
+      jumpAudio.play().catch(() => {});
+    } catch (e) {
+      // ignore audio errors
+    }
+  }
+
+  // ===== World settings =====
+const GRAV = 2200;
+// Base jump velocity adjusted to reduce jump height by ~30% from the original (900)
+const JUMP_V = 630;
+const MOVE_A = 2800;
+const MAX_VX = 520;       // a bit higher helps run-up
+const FRICTION = 2400;
+  const CAM_LERP = 0.12;
+
+ // ===== World settings =====
+const FLOOR_COUNT = 14;
+const FLOOR_SPACING = 700;   // taller band so the tower feels "tower-ish"
+const BASE_Y = 0;
+const TOP_Y = -(FLOOR_COUNT - 1) * FLOOR_SPACING;
+
+const TOWER_HALF_W = 560;    // keep platforms inside [-560..560]
+const LONG_FLOOR_W = 1200;   // long floor at each floor start
+// Reduce platform density: halve the number of small platforms per floor to make
+// the tower less cluttered and slightly easier to traverse.
+const PLAT_COUNT_PER_FLOOR = 8; // ~50% of original 15
+
+// Jump capability (used for generation constraints)
+const MAX_JUMP_DY = 150;     // max vertical gap between "path" platforms
+const MAX_JUMP_DX = 280;     // max horizontal gap between "path" platforms
+
+const platforms = [];
+  const tokens = [];
+const rng = (min, max) => min + Math.random() * (max - min);
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+function buildPlatforms() {
+  platforms.length = 0;
+  tokens.length = 0;
+
+  // Ground platform
+  platforms.push({ x: -99999, y: BASE_Y + 80, w: 199999, h: 26, kind: "ground" });
+
+  function addLongFloor(floorStartY) {
+    platforms.push({
+      x: -LONG_FLOOR_W / 2,
+      y: floorStartY + 80,
+      w: LONG_FLOOR_W,
+      h: 22,
+      kind: "floorStart"
+    });
+  }
+
+  for (let f = 1; f <= FLOOR_COUNT; f++) {
+    const floorStartY = BASE_Y - (f - 1) * FLOOR_SPACING;
+    addLongFloor(floorStartY);
+
+    if (f === FLOOR_COUNT) break;
+
+    const nextFloorStartY = BASE_Y - f * FLOOR_SPACING;
+
+    const bandBottom = floorStartY + 40;
+    const bandTop = nextFloorStartY + 120;
+
+    let prevX = 0;
+    let prevY = bandBottom;
+
+    const totalH = (bandBottom - bandTop);
+    const idealStep = totalH / (PLAT_COUNT_PER_FLOOR + 1);
+    const stepY = clamp(idealStep, 22, MAX_JUMP_DY);
+
+    for (let i = 0; i < PLAT_COUNT_PER_FLOOR; i++) {
+      const y = prevY - stepY;
+
+      const dir = (i % 2 === 0) ? 1 : -1;
+      const dx = dir * rng(140, MAX_JUMP_DX);
+      const xCenter = clamp(prevX + dx, -TOWER_HALF_W + 80, TOWER_HALF_W - 80);
+
+      const w = rng(160, 260);
+      const h = 18;
+
+      // try to place without overlap (attempts)
+      let placed = false;
+      for (let t = 0; t < 10 && !placed; t++) {
+        const tryXCenter = (t === 0)
+          ? xCenter
+          : clamp(prevX + (dir * rng(120, MAX_JUMP_DX)) + rng(-60, 60), -TOWER_HALF_W + 80, TOWER_HALF_W - 80);
+
+        const px = clamp(tryXCenter - w / 2, -TOWER_HALF_W, TOWER_HALF_W - w);
+
+        if (!overlapsAny(px, y, w, h, platforms, 24, 18)) {
+          platforms.push({ x: px, y, w, h, kind: "plank" });
+          prevX = tryXCenter;
+          prevY = y;
+          placed = true;
+        }
+      }
+
+      // If placement fails for some reason, still advance upward so generation doesn’t stall
+      if (!placed) {
+        prevY = y;
+      }
+
+      if (prevY <= bandTop) break;
+    }
+  }
+
+  // Top platform where boy stands
+  platforms.push({ x: -260, y: TOP_Y + 170, w: 520, h: 22, kind: "top" });
+
+  // Place jump-boost tokens on some 'plank' platforms (~25% chance)
+  for (const p of platforms) {
+    if (p.kind === "plank") {
+      if (Math.random() < 0.25) {
+        // token sits slightly above the platform center
+        const tw = 22, th = 22;
+        const tx = p.x + (p.w / 2) - tw / 2;
+        const ty = p.y - th - 6;
+        tokens.push({ x: tx, y: ty, w: tw, h: th, kind: "jumpToken", collected: false });
+      }
+    }
+  }
+}
+buildPlatforms();
+
+function overlapsAny(x, y, w, h, list, padX = 20, padY = 18) {
+  for (const p of list) {
+    const ax1 = x - padX, ay1 = y - padY, ax2 = x + w + padX, ay2 = y + h + padY;
+    const bx1 = p.x, by1 = p.y, bx2 = p.x + p.w, by2 = p.y + p.h;
+    const hit = ax1 < bx2 && ax2 > bx1 && ay1 < by2 && ay2 > by1;
+    if (hit) return true;
+  }
+  return false;
+}
+
+
+  // ===== Entities =====
+  const girl = {
+    x: 0, y: BASE_Y, w: 34, h: 48,
+    vx: 0, vy: 0,
+    onGround: false,
+    jumpBoostAvailable: false,
+    color: "#ffd6e8",
+  };
+
+  const boy = {
+    x: -520, y: BASE_Y, w: 34, h: 48,
+    vx: 0, vy: 0,
+    state: "walk", // walk -> rocket -> wait -> celebrate
+    holdFlowers: true,
+    holdCard: true,
+    t: 0
+  };
+
+  let camY = 0;
+
+  // ===== Intro cutscene =====
+  let cutsceneActive = true;
+  let cutsceneT = 0;
+  let cutsceneGirlBaseX = girl.x;
+  const CUTSCENE_TOTAL = 5.0; // seconds
+  const CUTSCENE_WALK = 2.0; // seconds walking towards girl
+  const CUTSCENE_PAUSE = 0.45; // brief stop before sling wind-up
+  const CUTSCENE_SLING = 0.8; // wind-up time (girl pulls back)
+  const CUTSCENE_ROCKET_START = CUTSCENE_WALK + CUTSCENE_PAUSE + CUTSCENE_SLING;
+  const CUTSCENE_WALK_SPEED = 180; // px/s
+  const CUTSCENE_STOP_OFFSET = 64; // px in front of girl where boy stops
+  const SLING_PULL_BACK = 36; // px boy is pulled back during wind-up
+  const SLING_LAUNCH_VY = -1400; // initial upward push on release
+
+  // ===== Game state =====
+  let reachedTop = false;
+  let showFireworks = false;
+
+  // Firework particles
+  const sparks = [];
+  function spawnFirework(cx, cy) {
+    const count = 90 + Math.floor(Math.random() * 40);
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = 180 + Math.random() * 520;
+      sparks.push({
+        x: cx, y: cy,
+        vx: Math.cos(a) * sp,
+        vy: Math.sin(a) * sp,
+        life: 1.1 + Math.random() * 0.9,
+        age: 0,
+        size: 2 + Math.random() * 2
+      });
+    }
+  }
+
+  // Floor label helper
+  function ordinal(n) {
+    if (n % 100 >= 11 && n % 100 <= 13) return n + "th";
+    switch (n % 10) {
+      case 1: return n + "st";
+      case 2: return n + "nd";
+      case 3: return n + "rd";
+      default: return n + "th";
+    }
+  }
+
+  function currentFloorFromY(y) {
+    // y goes negative as you climb up
+    const f = Math.floor((BASE_Y - y) / FLOOR_SPACING) + 1;
+    return Math.max(1, Math.min(FLOOR_COUNT, f));
+  }
+
+  // ===== Collision =====
+  function aabb(ax, ay, aw, ah, bx, by, bw, bh) {
+    return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+  }
+
+  function resolvePlatforms(entity, dt) {
+    entity.onGround = false;
+
+    // Horizontal move
+    entity.x += entity.vx * dt;
+
+    // Vertical move
+    const prevY = entity.y;
+    entity.y += entity.vy * dt;
+
+    // Collide only when falling onto platforms
+    if (entity.vy >= 0) {
+      for (const p of platforms) {
+        const px = p.x, py = p.y, pw = p.w, ph = p.h;
+        if (aabb(entity.x, entity.y, entity.w, entity.h, px, py, pw, ph)) {
+          // Was above platform last frame?
+          if (prevY + entity.h <= py + 2) {
+            entity.y = py - entity.h;
+            entity.vy = 0;
+            entity.onGround = true;
+          }
+        }
+      }
+    }
+  }
+
+  // ===== Boy rocket intro =====
+  function updateBoy(dt) {
+    boy.t += dt;
+    // Cutscene timeline: walk to girl, pause, then rocket up. During cutscene
+    // player input is ignored (see updateGirl).
+    if (cutsceneActive) {
+      cutsceneT += dt;
+
+      // Phase 1: walk toward a stop point in front of the girl
+      if (cutsceneT < CUTSCENE_WALK) {
+        const stopX = girl.x - CUTSCENE_STOP_OFFSET; // stop slightly in front (to girl's left)
+        const dx = stopX - boy.x;
+        const move = Math.sign(dx) * Math.min(Math.abs(dx), CUTSCENE_WALK_SPEED * dt);
+        boy.x += move;
+        boy.y = BASE_Y; // stay on ground
+      }
+
+      // Phase 2: brief standstill (guy stands in front of girl)
+      else if (cutsceneT < (CUTSCENE_WALK + CUTSCENE_PAUSE)) {
+        boy.x = girl.x - CUTSCENE_STOP_OFFSET;
+        boy.y = BASE_Y;
+      }
+
+      // Phase 3: wind-up / sling pull-back (girl pulls, boy gets pulled back slightly)
+      else if (cutsceneT < CUTSCENE_ROCKET_START) {
+        const slingT = (cutsceneT - (CUTSCENE_WALK + CUTSCENE_PAUSE)) / CUTSCENE_SLING; // 0..1
+        // boy is pulled back along x (further away from girl) then held
+        const pulledX = (girl.x - CUTSCENE_STOP_OFFSET) - (SLING_PULL_BACK * Math.sin(Math.min(1, slingT) * Math.PI));
+        boy.x = pulledX;
+        // slight crouch/down movement
+        boy.y = BASE_Y + Math.min(18, SLING_PULL_BACK * 0.35 * Math.sin(Math.min(1, slingT) * Math.PI));
+        // girl leans back slightly during wind-up (handled in updateGirl drawing/position)
+      }
+
+      // Phase 4: release -> rocket up (slung)
+      else {
+        if (boy.state !== "rocket") boy.state = "rocket";
+
+        // Give an initial strong upward velocity to simulate sling
+        boy.vy = SLING_LAUNCH_VY;
+        // move x to be roughly at girl's position while ascending (small wobble)
+        boy.x = girl.x + Math.sin(boy.t * 6) * 8;
+
+        // integrate the spring-ish approach to top but using vy as fast initial burst
+        const targetY = TOP_Y + 92;
+        const dy = (targetY - boy.y);
+        // apply a spring damping on vy to settle at the top
+        boy.vy += dy * 3.0 * dt;
+        boy.y += boy.vy * dt;
+
+        if (Math.abs(dy) < 2.5 && Math.abs(boy.vy) < 30) {
+          boy.y = targetY;
+          boy.state = "wait";
+          boy.vy = 0;
+          cutsceneActive = false; // cutscene finished, enable player
+        }
+      }
+
+      return;
+    }
+
+    if (boy.state === "rocket") {
+      // accelerate upward quickly until near top
+      const targetY = TOP_Y + 92;
+      const dy = (targetY - boy.y);
+      boy.vy = dy * 5.5; // spring-ish
+      boy.y += boy.vy * dt;
+
+      // little wobble in x
+      boy.x = Math.sin(boy.t * 6) * 18;
+
+      if (Math.abs(dy) < 2.5) {
+        boy.y = targetY;
+        boy.state = "wait";
+        boy.vy = 0;
+      }
+    } else if (boy.state === "celebrate") {
+      // happy bounce
+      boy.x = Math.sin(boy.t * 10) * 10;
+    } else {
+      boy.x = 0;
+    }
+  }
+
+  // ===== Input & movement for girl =====
+  function updateGirl(dt) {
+    // During intro cutscene, freeze horizontal input but allow a small lean
+    if (cutsceneActive) {
+      girl.vx = 0;
+      girl.vy = 0;
+      girl.onGround = true;
+      // slight lean back during sling wind-up
+      if (cutsceneT >= (CUTSCENE_WALK + CUTSCENE_PAUSE) && cutsceneT < CUTSCENE_ROCKET_START) {
+        const slingT = (cutsceneT - (CUTSCENE_WALK + CUTSCENE_PAUSE)) / CUTSCENE_SLING; // 0..1
+        // lean a little (move a few px backward) based on base x
+        girl.x = cutsceneGirlBaseX + Math.min(8, 8 * Math.sin(Math.min(1, slingT) * Math.PI));
+      } else {
+        girl.x = cutsceneGirlBaseX;
+      }
+      // ensure she's within bounds
+      girl.x = Math.max(-520, Math.min(520, girl.x));
+      return;
+    }
+    const left = keys.has("ArrowLeft") || keys.has("KeyA");
+    const right = keys.has("ArrowRight") || keys.has("KeyD");
+    const jump = keys.has("Space") || keys.has("ArrowUp");
+
+    // Horizontal acceleration
+    if (left) girl.vx -= MOVE_A * dt;
+    if (right) girl.vx += MOVE_A * dt;
+
+    // Clamp
+    // Friction only really applies when on ground (more "icy tower" momentum)
+    if (!left && !right) {
+      const fr = girl.onGround ? FRICTION : (FRICTION * 0.25);
+      if (girl.vx > 0) girl.vx = Math.max(0, girl.vx - fr * dt);
+      if (girl.vx < 0) girl.vx = Math.min(0, girl.vx + fr * dt);
+    }
+    girl.vx = Math.max(-MAX_VX, Math.min(MAX_VX, girl.vx));
+
+    // Gravity
+    girl.vy += GRAV * dt;
+
+    // Jump (only if onGround)
+    if (jump && girl.onGround) {
+    const speed = Math.abs(girl.vx);
+
+    // Boost only if she's actually running (direction held + decent speed)
+    const running = (left || right) && speed > 220;
+
+    // Boost scales with speed, capped
+    const boost = running ? Math.min(320, (speed - 220) * 0.9) : 0;
+
+    // If a jump token was collected, double the base jump for this jump (one-time)
+    const baseJump = girl.jumpBoostAvailable ? (JUMP_V * 2) : JUMP_V;
+  girl.vy = -(baseJump + boost);
+  // play jump sound
+  try { playJumpSound(); } catch (e) {}
+    // consume jump boost if used
+    if (girl.jumpBoostAvailable) {
+      girl.jumpBoostAvailable = false;
+      const boostTxt = document.getElementById('boostTxt');
+      if (boostTxt) boostTxt.textContent = 'None';
+    }
+    girl.onGround = false;
+  }
+
+    resolvePlatforms(girl, dt);
+
+    // Collect tokens
+    for (const t of tokens) {
+      if (t.collected) continue;
+      if (aabb(girl.x, girl.y, girl.w, girl.h, t.x, t.y, t.w, t.h)) {
+        t.collected = true;
+        // grant one-time next-jump multiplier
+        girl.jumpBoostAvailable = true;
+        const boostTxt = document.getElementById('boostTxt');
+        if (boostTxt) boostTxt.textContent = 'Ready';
+      }
+    }
+
+    // Keep girl somewhat within view horizontally
+    girl.x = Math.max(-520, Math.min(520, girl.x));
+  }
+
+  // ===== Reached top logic =====
+  function checkTop() {
+    const topPlatformY = TOP_Y + 140;
+    if (!reachedTop && girl.y <= topPlatformY - 30) {
+      // close enough to top area; require she is roughly near boy
+      const dist = Math.hypot((girl.x - boy.x), (girl.y - boy.y));
+      if (dist < 140) {
+        reachedTop = true;
+        openValentineModal();
+      }
+    }
+  }
+
+  // ===== Modal / buttons =====
+  function openValentineModal() {
+    modal.style.display = "flex";
+    // place "No" somewhere in its container
+    placeNoButtonRandom();
+  }
+
+  function placeNoButtonRandom() {
+    const area = btnArea.getBoundingClientRect();
+    const btn = noBtn.getBoundingClientRect();
+    const pad = 8;
+
+    const maxX = Math.max(pad, area.width - btn.width - pad);
+    const maxY = Math.max(pad, area.height - btn.height - pad);
+
+    const x = pad + Math.random() * (maxX - pad);
+    const y = pad + Math.random() * (maxY - pad);
+
+    // we position relative to btnArea
+    noBtn.style.left = x + "px";
+    noBtn.style.top = y + "px";
+    noBtn.style.right = "auto";
+  }
+
+  // "No" runs away from cursor when it gets close
+  btnArea.addEventListener("mousemove", (e) => {
+    if (modal.style.display !== "flex") return;
+    if (showFireworks) return;
+
+    const area = btnArea.getBoundingClientRect();
+    const nb = noBtn.getBoundingClientRect();
+
+    const mx = e.clientX;
+    const my = e.clientY;
+
+    const cx = nb.left + nb.width / 2;
+    const cy = nb.top + nb.height / 2;
+
+    const dist = Math.hypot(mx - cx, my - cy);
+
+    if (dist < 110) {
+      // jump away to random location
+      placeNoButtonRandom();
+    }
+  });
+
+  yesBtn.addEventListener("click", () => {
+    if (showFireworks) return;
+    // User accepted — show success and start celebration
+    successMsg.style.display = "block";
+    showFireworks = true;
+    boy.state = "celebrate";
+
+    // Burst a few fireworks
+    const bursts = 7;
+    for (let i = 0; i < bursts; i++) {
+      setTimeout(() => {
+        const x = (window.innerWidth / 2) + (Math.random() * 420 - 210);
+        const y = (window.innerHeight / 2) + (Math.random() * 220 - 110);
+        // convert screen to world, then back in render using camera, so we’ll spawn in screen space separately.
+        // We'll just store in screen space by adding a flag:
+        spawnFireworkScreen(x, y);
+      }, i * 220);
+    }
+  });
+
+  // Block "No" clicking (optional: show playful message)
+  noBtn.addEventListener("click", () => {
+    placeNoButtonRandom();
+  });
+
+  // Firework particles in SCREEN space
+  const screenSparks = [];
+  function spawnFireworkScreen(sx, sy) {
+    const count = 90 + Math.floor(Math.random() * 50);
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = 140 + Math.random() * 560;
+      screenSparks.push({
+        sx, sy,
+        vx: Math.cos(a) * sp,
+        vy: Math.sin(a) * sp,
+        life: 1.0 + Math.random() * 1.1,
+        age: 0,
+        size: 2 + Math.random() * 2
+      });
+    }
+  }
+
+  // ===== Rendering helpers =====
+  function worldToScreen(wx, wy) {
+    const sx = window.innerWidth / 2 + wx;
+    const sy = window.innerHeight / 2 + (wy - camY);
+    return { sx, sy };
+  }
+
+  function drawCharacter(ent, type) {
+    const { sx, sy } = worldToScreen(ent.x, ent.y);
+    // Body
+    ctx.save();
+    ctx.translate(sx, sy);
+
+    // Shadow
+    ctx.globalAlpha = 0.25;
+    ctx.fillStyle = "#000";
+    ctx.beginPath();
+    ctx.ellipse(ent.w/2, ent.h + 10, ent.w * 0.7, 9, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // Torso
+    ctx.fillStyle = (type === "girl") ? "#ffb3d0" : "#8ed1ff";
+    ctx.fillRect(0, 10, ent.w, ent.h - 10);
+
+    // Head (image if available, otherwise vector fallback)
+    const headW = 28;
+    const headH = 28;
+    const headX = ent.w/2 - headW/2;
+    const headY = 10 - headH/2;
+
+    // Prefer the jump face when the girl is jumping upward; otherwise use normal images
+    const isGirlJumping = (type === "girl" && !girl.onGround && girl.vy < -20);
+    const useGirlJumpImg = (isGirlJumping && girlJumpHeadImg && girlJumpHeadImg._ready);
+    const useGirlImg = (!useGirlJumpImg && type === "girl" && girlHeadImg && girlHeadImg._ready);
+    const useBoyImg = (type === "boy" && boyHeadImg && boyHeadImg._ready);
+
+    if (useGirlJumpImg || useGirlImg || useBoyImg) {
+      try {
+        const img = useGirlJumpImg ? girlJumpHeadImg : (useGirlImg ? girlHeadImg : boyHeadImg);
+        ctx.drawImage(img, headX, headY, headW, headH);
+      } catch (e) {
+        // fallback to vector head on any draw error
+        ctx.fillStyle = "#ffe6cc";
+        ctx.beginPath();
+        ctx.arc(ent.w/2, 10, 12, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else {
+      // Vector fallback head
+      ctx.fillStyle = "#ffe6cc";
+      ctx.beginPath();
+      ctx.arc(ent.w/2, 10, 12, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Hair / cap
+      if (type === "girl") {
+        ctx.fillStyle = "#5a2a27";
+        ctx.beginPath();
+        ctx.arc(ent.w/2, 8, 12, Math.PI, 0);
+        ctx.fill();
+      } else {
+        ctx.fillStyle = "#1b2a4a";
+        ctx.fillRect(ent.w/2 - 12, -2, 24, 8);
+      }
+    }
+
+    // Simple arms
+    ctx.strokeStyle = "#ffe6cc";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(4, 24); ctx.lineTo(-6, 36);
+    ctx.moveTo(ent.w-4, 24); ctx.lineTo(ent.w+6, 36);
+    ctx.stroke();
+
+    // Boy props
+    if (type === "boy" && boy.state !== "rocket") {
+      // Flowers
+      ctx.fillStyle = "#ff5fa2";
+      ctx.beginPath();
+      ctx.arc(ent.w + 12, 30, 6, 0, Math.PI*2);
+      ctx.arc(ent.w + 20, 30, 6, 0, Math.PI*2);
+      ctx.arc(ent.w + 16, 24, 6, 0, Math.PI*2);
+      ctx.fill();
+      // Stem
+      ctx.strokeStyle = "#5fe38a";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(ent.w + 16, 30);
+      ctx.lineTo(ent.w + 14, 48);
+      ctx.stroke();
+
+      // Card
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(ent.w + 6, 48, 20, 14);
+      ctx.fillStyle = "#ff4d6d";
+      ctx.fillRect(ent.w + 14, 52, 4, 4);
+    }
+
+    // Rocket effect
+    if (type === "boy" && boy.state === "rocket") {
+      ctx.globalAlpha = 0.75;
+      ctx.fillStyle = "#ffdc5f";
+      ctx.beginPath();
+      ctx.moveTo(ent.w/2, ent.h + 14);
+      ctx.lineTo(ent.w/2 - 10, ent.h + 44);
+      ctx.lineTo(ent.w/2 + 10, ent.h + 44);
+      ctx.closePath();
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    ctx.restore();
+  }
+
+  function drawPlatforms() {
+    for (const p of platforms) {
+      const { sx, sy } = worldToScreen(p.x, p.y);
+      ctx.save();
+      ctx.translate(sx, sy);
+
+      if (p.kind === "ground") {
+        ctx.fillStyle = "rgba(255,255,255,0.10)";
+        ctx.fillRect(-2000, 0, 4000, p.h);
+      } else if (p.kind === "top") {
+        ctx.fillStyle = "rgba(255, 143, 171, 0.35)";
+        ctx.fillRect(0, 0, p.w, p.h);
+        ctx.strokeStyle = "rgba(255,255,255,0.25)";
+        ctx.strokeRect(0, 0, p.w, p.h);
+      } else if (p.kind === "floorStart") {
+        ctx.fillStyle = "rgba(255,255,255,0.10)";
+        ctx.fillRect(0, 0, p.w, p.h);
+        ctx.strokeStyle = "rgba(255,255,255,0.14)";
+        ctx.strokeRect(0, 0, p.w, p.h);
+      } else {
+        ctx.fillStyle = "rgba(255,255,255,0.14)";
+        ctx.fillRect(0, 0, p.w, p.h);
+      }
+      ctx.restore();
+    }
+    // Draw tokens
+    for (let i = tokens.length - 1; i >= 0; i--) {
+      const t = tokens[i];
+      if (t.collected) continue;
+      const { sx, sy } = worldToScreen(t.x, t.y);
+      ctx.save();
+      ctx.translate(sx + t.w/2, sy + t.h/2);
+
+      // pulsing heart/arrow-like token
+      const grd = ctx.createRadialGradient(0, 0, 2, 0, 0, 18);
+      grd.addColorStop(0, '#fff8f9');
+      grd.addColorStop(0.3, '#ff9bb8');
+      grd.addColorStop(1, '#ff4d6d');
+      ctx.fillStyle = grd;
+      ctx.beginPath();
+      ctx.arc(0, 0, t.w/2, 0, Math.PI*2);
+      ctx.fill();
+
+      // small upward arrow to indicate jump boost
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.moveTo(-4, 3);
+      ctx.lineTo(0, -5);
+      ctx.lineTo(4, 3);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.restore();
+    }
+  }
+
+  function drawFloorLinesAndLabels() {
+    // Draw floor markers for Feb 1..14
+    for (let f = 1; f <= FLOOR_COUNT; f++) {
+      const y = BASE_Y - (f - 1) * FLOOR_SPACING;
+      const { sx, sy } = worldToScreen(-520, y);
+      const lineY = sy + 120; // place line slightly below label for feel
+
+      // Only draw if near viewport to save time
+      if (lineY < -200 || lineY > window.innerHeight + 200) continue;
+
+      // line
+      ctx.strokeStyle = "rgba(255,255,255,0.10)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(40, lineY);
+      ctx.lineTo(window.innerWidth - 40, lineY);
+      ctx.stroke();
+
+      // label
+      const label = `Feb ${ordinal(f)} Floor`;
+      ctx.fillStyle = "rgba(232,236,255,0.86)";
+      ctx.font = "600 14px system-ui";
+      ctx.fillText(label, 46, lineY - 10);
+    }
+  }
+
+  function drawBackground() {
+    // Gradient sky
+    const g = ctx.createLinearGradient(0, 0, 0, window.innerHeight);
+    g.addColorStop(0, "#070a16");
+    g.addColorStop(1, "#0f1b3d");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+
+    // Stars
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = "#ffffff";
+    for (let i = 0; i < 70; i++) {
+      const x = (i * 97) % window.innerWidth;
+      const y = (i * 193) % window.innerHeight;
+      ctx.fillRect(x, y, 2, 2);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawTowerSides() {
+    // Tower walls as vertical lines around play area
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(window.innerWidth/2 - 620, 0);
+    ctx.lineTo(window.innerWidth/2 - 620, window.innerHeight);
+    ctx.moveTo(window.innerWidth/2 + 620, 0);
+    ctx.lineTo(window.innerWidth/2 + 620, window.innerHeight);
+    ctx.stroke();
+  }
+
+  function drawFireworks(dt) {
+    if (!showFireworks) return;
+
+    for (let i = screenSparks.length - 1; i >= 0; i--) {
+      const s = screenSparks[i];
+      s.age += dt;
+      if (s.age > s.life) { screenSparks.splice(i, 1); continue; }
+
+      // gravity
+      s.vy += 650 * dt;
+      s.sx += s.vx * dt;
+      s.sy += s.vy * dt;
+
+      const t = 1 - (s.age / s.life);
+      ctx.globalAlpha = Math.max(0, t);
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.arc(s.sx, s.sy, s.size, 0, Math.PI*2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    // Keep some bursts going
+    if (screenSparks.length < 40) {
+      spawnFireworkScreen(
+        window.innerWidth / 2 + (Math.random() * 520 - 260),
+        window.innerHeight / 2 + (Math.random() * 240 - 120)
+      );
+    }
+  }
+
+  // ===== Main loop =====
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min(0.033, (now - last) / 1000);
+    last = now;
+
+    // Update
+    updateBoy(dt);
+
+    if (!reachedTop) {
+      updateGirl(dt);
+      checkTop();
+    }
+
+    // Safety: if cutscene somehow doesn't finish, end it after maximum time
+    if (cutsceneActive && cutsceneT > CUTSCENE_TOTAL) {
+      cutsceneActive = false;
+      // ensure boy is at top position so gameplay can continue
+      boy.state = "wait";
+      boy.vy = 0;
+      boy.y = TOP_Y + 92;
+      // restore girl's base position
+      girl.x = cutsceneGirlBaseX;
+    }
+
+    // Update camera to follow girl upward
+    const targetCamY = Math.min(0, girl.y - 40);
+    camY += (targetCamY - camY) * CAM_LERP;
+
+    // Floor text
+    const floor = currentFloorFromY(girl.y);
+    floorTxt.textContent = `Feb ${ordinal(floor)} Floor`;
+
+    // Render
+    drawBackground();
+    drawTowerSides();
+    drawFloorLinesAndLabels();
+    drawPlatforms();
+
+    // Draw boy (at top) and girl
+    drawCharacter(boy, "boy");
+    drawCharacter(girl, "girl");
+
+    // Fireworks overlay on top of scene
+    drawFireworks(dt);
+
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>

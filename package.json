@@ -1,0 +1,31 @@
+{
+  "name": "valentine-icy-tower",
+  "version": "1.0.0",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "pack:mac": "electron-builder --mac",
+    "pack:win": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.valentine.icetower",
+    "productName": "Valentine Tower",
+    "files": [
+      "index.html",
+      "main.js",
+      "package.json",
+      "public/**"
+    ],
+    "mac": {
+      "target": "dmg"
+    },
+    "win": {
+      "target": "nsis"
+    }
+  }
+}
